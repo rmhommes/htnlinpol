@@ -30,7 +30,6 @@ def N_P(z):
 	return ['n_move_from_to{},{},{}'.format(i,j,d) for i in range(z) for j in range(z) for d in directions if isMoveLegal(i,j,d,z)] + \
 		['n_set_target{},{}'.format(i,j) for i in range(z) for j in range(z)] + \
 		['n_report_success',
-		'n_report_fail',
 		'n_scan_area',
 		'n_classify_object',
 		'n_pick_up_garbage',
@@ -43,8 +42,7 @@ def A(z):
 		return None
 	return ['a_move_from_to{},{},{}'.format(i,j,d) for i in range(z) for j in range(z) for d in directions if isMoveLegal(i,j,d,z)] + \
 		['a_set_target{},{}'.format(i,j) for i in range(z) for j in range(z)] + \
-		['a_report_success',
-		'a_report_fail']
+		['a_report_success']
 
 # Generate non-deterministic actions for world with size z
 def A_p():
@@ -54,7 +52,8 @@ def A_p():
 		'a_localize_garbage',
 		'a_collect_garbage']
 
-def state_transition_function(s, a, z):
+def state_transition_function(s, a):
+	z = getDim(s)
 	prefix = 'a_move_from_to'
 	if a.startswith(prefix):
 		args = a[len(prefix):]
@@ -80,15 +79,7 @@ def state_transition_function(s, a, z):
 		targetPos = getTargetPosition(s)
 		if targetPos is None:
 			return None
-		if checkPrecs(['area_cleared{},{}'.format(targetPos[0], targetPos[1])], ['area_failed{},{}'.format(targetPos[0], targetPos[1])], s):
-			pass
-		else:
-			return None
-	if a == 'a_report_fail':
-		targetPos = getTargetPosition(s)
-		if targetPos is None:
-			return None
-		if checkPrecs(['area_failed{},{}'.format(targetPos[0], targetPos[1])], ['area_cleared{},{}'.format(targetPos[0], targetPos[1])], s):
+		if checkPrecs(['area_cleared{},{}'.format(targetPos[0], targetPos[1])], [], s):
 			pass
 		else:
 			return None
@@ -128,6 +119,12 @@ def getAreaVal(s, i, j):
 		if v.startswith(prefix):
 			return int(v[len(prefix):])
 
+def getDim(s):
+	for v in s:
+		prefix = 'dim'
+		if v.startswith(prefix):
+			return int(v[len(prefix):])
+
 def getStartingPosition(s):
 	for v in s:
 		prefix = 'currentPos'
@@ -159,10 +156,10 @@ def worldToDijkstraGrid(s, dim):
 			utility = row[yi]
 			p = '{},{}'.format(xi, yi)
 			v = {}
-			if utility >= 0 and 'area_failed{},{}'.format(xi, yi) not in s:
+			if utility >= 0:
 				for xni in range(xi-1, xi+2):
 					for yni in range(yi-1, yi+2):
-						if xni >= 0 and xni < len(ll) and yni >= 0 and yni < len(ll[xni]) and ll[xni][yni] is not None and 'area_failed{},{}'.format(xni, yni) not in s:
+						if xni >= 0 and xni < len(ll) and yni >= 0 and yni < len(ll[xni]) and ll[xni][yni] is not None:
 							pn = '{},{}'.format(xni, yni)
 							v[pn] = 1
 			G[p] = v
@@ -182,75 +179,67 @@ def generateWorld(dim, p_obst):
 				s.append('areaValue{},{},{}'.format(i,j,-1))
 	s.append('currentPos{},{}'.format(0,0))
 	s.append('startingPos{},{}'.format(0,0))
+	s.append('dim{}'.format(dim))
 	return s
 
-def isStateSubSet(S1, S2):
-	for s1 in S1:
-		s1.sort()
-	for s2 in S2:
-		s2.sort()
-	S1 = set(map(lambda e: str(e), S1))
-	S2 = set(map(lambda e: str(e), S2))
-	return S1.issubset(S2)
-
-def isStateDoubleSubSet(S1, S2):
-	for s1 in S1:
-		b = False
-		for s2 in S2:
-			if set(s2).issubset(set(s1)):
-				b = True
-				break
-		if not b:
-			return False
-	return True
-
-def toPolicyFunction(s, Pi, gamma_p_dict):
-	a = None
-	gamma_p = gammaDictToFunc(gamma_p_dict)
-	for S, a_prime in Pi:
-		r = gamma_p(s, a_prime)
-		if s in S and not (r is None or len(r) == 0):
-			a = a_prime
-			break
-	if a is None:
-		return None
-	a_tail = a[1:]
-	return ('t'+a_tail, [('t'+a_tail,'n'+a_tail)])
-
-def updateS(S, pair):
-	s, p = pair
-	S_new = []
-	pairAdded = False
-	for (s_prime, p_prime) in S:
-		if stateEquals(s, s_prime):
-			S_new.append((s, (p + p_prime)))
-			pairAdded = True
-		else:
-			S_new.append((s_prime, p_prime))
-	if not pairAdded:
-		S_new.append(pair)
-	return S_new
-
-def calcPolicyOutput(Pi, S, gamma_p, delta):
-	output = []
+def visitedStatesPolicy(pi, S, gamma_p, Pr):
 	visited = set()
+	result = []
 	while len(S) > 0:
 		S_prime = []
 		for s in S:
-			s_converted = state_convert(s,state_transition_function_policy_dict())
+			s_converted = tuple(sorted(s))
 			if s_converted in visited:
 				continue
 			visited.add(s_converted)
-			action = Pi(s_converted)
+			result.append(s)
+			a = pi[s_converted]
 			if action is None:
-				output.append(s)
 				continue
-			a = delta(action[1][0][1])
 			S_prime_2 = gamma_p(s, a)
 			for s_prime, _ in S_prime_2:
 				S_prime.append(s_prime)
 		S = S_prime
-	return output
+	return result
+
+def exitStatesPolicy(pi, S, gamma_p, Pr):
+	exitStates = []
+	visited = set()
+	while len(S) > 0:
+		S_prime = []
+		for s in S:
+			s_converted = tuple(sorted(s))
+			if s_converted in visited:
+				continue
+			visited.add(s_converted)
+			a = pi[s_converted]
+			if a is None:
+				exitStates.append(s)
+				continue
+			S_prime_2 = gamma_p(s, a)
+			for s_prime, _ in S_prime_2:
+				S_prime.append(s_prime)
+		S = S_prime
+	return exitStates
+
+def exitStatesActionSequence(pi, S, gamma):
+	exitStates = []
+	visited = set()
+	for s in S:
+		s_prime = copy.deepcopy(s)
+		for a in pi:
+			s_prime = gamma(s_prime, a)
+		exitStates.append(s_prime)
+	return exitStates
+
+def exitStates(Pi, S, gamma, gamma_p, Pr):
+	exitStates = []
+	for pi in Pi:
+		if type(pi) is tuple:
+			exitStates += exitStatesActionSequence(pi)
+		else:
+			exitStates += exitStatesPolicy(pi)
+	return exitStates
 
 def checkPrecs(precs, precsNeg, s):
 	return set(precs).issubset(s) and len(set(s).intersection(set(precsNeg))) == 0
@@ -260,35 +249,6 @@ def delFromState(dels, s):
 
 def addToState(adds, s):
 	return list(set(s).union(set(adds)))
-
-def state_convert(s, gamma_p_dict):
-	if type(s) == str:
-		return s
-	currentPosition = getStartingPosition(s)
-	for state in gamma_p_dict['states']:
-		if state in s or state+'{},{}'.format(currentPosition[0], currentPosition[1]) in s:
-			return state
-	return 'default'
-
-def policy_convert(Pi, gamma_p_dict):
-	Pi_new = []
-	for states, action in Pi:
-		states_new = list(map(lambda state: state_convert(state, gamma_p_dict), states))
-		Pi_new.append((states_new, action))
-	return Pi_new
-
-def state_transition_function_policy_dict():
-	d = {
-		'states': ['default', 'object_detected', 'area_cleared', 'area_failed', 'object_classified_as_garbage', 'garbage_localized', 'gripper_full_expected', 'gripper_empty_unexpected'],
-		'actions': ['a_scan_area', 'a_classify_object', 'a_pick_up_garbage', 'a_localize_garbage', 'a_collect_garbage'],
-		'transitions': {'a_scan_area': [('default', 'object_detected', 0.8), ('default', 'area_cleared', 0.2 * 0.9), ('default', 'area_failed', 0.2 * 0.1)],
-						'a_classify_object': [('object_detected', 'object_classified_as_garbage', 0.5), ('object_detected', 'default', 0.5)],
-						'a_pick_up_garbage': [('garbage_localized', 'gripper_full_expected', 0.75), ('garbage_localized', 'gripper_empty_unexpected', 0.25)],
-						'a_localize_garbage': [('object_classified_as_garbage', 'garbage_localized', 1), ('gripper_empty_unexpected', 'garbage_localized', 1)],
-						'a_collect_garbage': [('gripper_full_expected', 'default', 1)]
-						}
-	}
-	return d
 
 def create_isomorphic_task_network(tn):
 	T, prec, alpha = tn
@@ -352,32 +312,6 @@ def areTaskNetworksIsomorphic(tn_1, tn_2):
 	b_3 = set(map(lambda e: (dict(alpha_1)[e[0]], dict(alpha_1)[e[1]]), prec_1)) == set(map(lambda e: (dict(alpha_2)[e[0]], dict(alpha_2)[e[1]]), prec_2))
 	return b_1 and b_2 and b_3
 
-def getTaskNetworkSignature(tn):
-	T, prec, alpha = tn
-	prec_sig = list(map(lambda e: (dict(alpha)[e[0]], dict(alpha)[e[1]]), prec))
-	alpha_sig = list(map(lambda e: e[1], alpha))
-	return prec_sig, alpha_sig
-
-def filterStatesForSubroutine(tnsAndS, placeholders, S, gamma, gamma_p, delta, dim):
-	filterMap = defaultdict(lambda: [0, [], None])
-	allStates = list(map(lambda e: e[1], tnsAndS))
-	for tn, (s, pOrig) in tnsAndS:
-		T, prec, alpha = tn
-		sigStr = str(getTaskNetworkSignature(tn))
-		d = state_transition_function_policy_dict()
-		placeholders_converted = dict(map(lambda e: (e[0], (lambda state: toPolicyFunction(state, policy_convert(e[1][0], d), d), e[1][1])), placeholders.items()))
-		p, _ = calcPlanRobustness((T, alpha), placeholders_converted, allStates, gamma, d, gamma_p, delta, dim)
-		if p >= filterMap[sigStr][0]:
-			filterMap[sigStr][0] = p
-			filterMap[sigStr][1] = (s, pOrig)
-			filterMap[sigStr][2] = tn
-	sortedFilterList = list(filterMap.items())
-	sortedFilterList.sort(key=lambda keyValuePair: keyValuePair[1][0])
-	if len(sortedFilterList) == 0:
-		return False
-	result = list(map(lambda e: (e[1][2], e[1][1]), sortedFilterList))
-	return result
-
 def getOrderRoots(T, prec):
 	T_remove = T.copy()
 	roots = set()
@@ -408,31 +342,29 @@ def getMethods(n, M):
 			methods.append(m)
 	return methods
 
-def stateEquals(s_1, s_2):
-	return len(set(s_1) - set(s_2)) == 0 and len(set(s_2) - set(s_1)) == 0
-
-def gammaDictToFunc(gamma):
-	return lambda s, a: list(map(lambda tup: tup[1:], list(filter(lambda e: e[0] == s, gamma['transitions'][a]))))
-
-def gammaDictToMatrix(gamma, Pi, delta):
-	M = []
-	transitions = gamma['transitions']
-	states = gamma['states']
-	for sFrom in states:
-		row = []
-		for sTo in states:
-			p = getTransitionProb(transitions, sFrom, sTo, Pi, delta)
-			row.append(p)
-		M.append(row)
-	return np.array(M)
-
-def getTransitionProb(transitions, sFrom, sTo, Pi, delta):
-	for a, tups in transitions.items():
-		for sFrom_prime, sTo_prime, p in tups:
-			if delta(Pi(sFrom_prime)[1][0][1]) == a:
-				if sFrom == sFrom_prime and sTo == sTo_prime:
-					return p
-	return 0
+def stateActionTransitionFunctionToMatrix(pi, gamma_p, Pr):
+	S = list(pi.keys())
+	A = list(pi.values())
+	visitedStates = visitedStatesPolicy(pi, S, gamma_p, Pr)
+	indices = {}
+	index = 0
+	for visitedState in visitedStates:
+		mapState = tuple(sorted(visitedState))
+		indices[mapState] = index
+		index += 1
+	nStates = len(visitedStates)
+	M = list(map(lambda _: (list(map(lambda _: 0, list(range(nStates))))), list(range(nStates))))
+	index = 0
+	for visitedState in visitedStates:
+		row = M[index]
+		for a in A:
+			state_prob_pairs = gamma_p(visitedState, a)
+			for state_prime, p in state_prob_pairs:
+				mapState = tuple(sorted(state_prime))
+				colIndex = indices[mapState]
+				row[colIndex] += p
+		index += 1
+	return M, visitedStates
 
 ###############################
 # PLANNING SUBROUTINE FUNCTIONS
@@ -441,11 +373,11 @@ def getTransitionProb(transitions, sFrom, sTo, Pi, delta):
 def reportToHuman(s):
 	targetPos = getTargetPosition(s)
 	if 'area_cleared{},{}'.format(targetPos[0], targetPos[1]) in s:
-		return (['t_report_success'], [], [('t_report_success', 'n_report_success')]), s
-	return False
+		yield 'a_report_success'
 
-def calcShortestPath(s, gamma, dim):
+def calcShortestPath(s, gamma):
 	sOrig = s.copy()
+	dim = getDim(s)
 	dijkstraGrid = worldToDijkstraGrid(s, dim)
 	startingPos = getStartingPosition(s)
 	targetPos = getTargetPosition(s)
@@ -461,38 +393,15 @@ def calcShortestPath(s, gamma, dim):
 			y_new = dijkstraPos[1]
 			for d in [0, 45, 90, 135, 180, 225, 270, 315]:
 				if calcMove(currentPosition[0],currentPosition[1],d) == (x_new, y_new):
-					operators.append('n_move_from_to{},{},{}'.format(currentPosition[0],currentPosition[1],d))
-					s = gamma(s, operators[-1], dim)
+					operators.append('a_move_from_to{},{},{}'.format(currentPosition[0],currentPosition[1],d))
+					s = gamma(s, operators[-1])
 					break
 			currentPosition = x_new, y_new
-		T = []
-		prec = []
-		alpha = []
-		indexMap = defaultdict(lambda: 0)
-		if len(operators) > 0:
-			o1 = operators[0]
-			t1 = 't'+o1[1:]
-			T.append(t1)
-			indexMap[t1] += 1
-			lastTask = t1
-			namingPair = t1, o1
-			alpha.append(namingPair)
-			for i in range(1, len(operators)):
-				o = operators[i]
-				t = 't'+o[1:]
-				if indexMap[t] > 0:
-					t += '{}'.format(indexMap[t])
-				indexMap[t] += 1
-				T.append(t)
-				orderingPair = lastTask, t
-				prec.append(orderingPair)
-				namingPair = t, o
-				alpha.append(namingPair) 
-				lastTask = t
-		return (T, prec, alpha), sOrig
+		yield operators
 
-def chooseWaypoint(s, gamma, dim):
+def chooseWaypoint(s, gamma):
 	vals = []
+	dim = getDim(s)
 	for i in range(dim):
 		for j in range(dim):
 			val = getAreaVal(s, i, j), i, j
@@ -502,15 +411,9 @@ def chooseWaypoint(s, gamma, dim):
 		chosen = vals[index]
 		if 'area_visited{},{}'.format(chosen[1], chosen[2]) in s:
 			continue
-		n = 'n_set_target{},{}'.format(chosen[1], chosen[2])
-		T = ['t'+n[1:]]
-		prec = []
-		alpha = [(T[0], n)]
-		a = 'a'+ n[1:]
-		s_prime = gamma(s, a, dim)
-		yield (T, prec, alpha), s
+		yield 'a_set_target{},{}'.format(chosen[1], chosen[2])
 
-def cleanUpGarbage(S, z, gamma_p, NP, A, delta, dim):
+def cleanUpGarbage(s, gamma_p, A, Pr):
 	A = ['a_scan_area',
 		'a_classify_object',
 		'a_pick_up_garbage',
@@ -525,14 +428,11 @@ def cleanUpGarbage(S, z, gamma_p, NP, A, delta, dim):
 		('t_after_classify', ['a_localize_garbage', 'a_pick_up_garbage', 't_after_pick_up']),
 		('t_after_pick_up', ['t_after_classify']),
 		('t_after_pick_up', ['a_collect_garbage', 't_policy'])]
-	gamma = yoyo.state_transition_function_policy
-	states = list(map(lambda e: e[0], S))
+	gamma_p = yoyo.state_transition_function_policy
+	states = [s]
 	F = [(states, X_0)]
-	Pi = yoyo.yoyo(F, G, M, Pi, gamma, A, states, X_0, z)
-	Pi_func = lambda state: toPolicyFunction(state, Pi, gamma_p)
-	d = state_transition_function_policy_dict()
-	_, S_result = calcPlanRobustness((['t_temp'], ('t_temp', 'n_temp')), {'t_temp': (lambda state: toPolicyFunction(state, policy_convert(Pi, d), d), None)}, S, None, d, gamma_p, delta, dim)	
-	return Pi, S_result
+	pi = yoyo.yoyo(F, G, M, Pi, gamma_p, A, states, X_0)
+	return pi
 
 #############################
 # PROBABILISTIC EXECUTABILITY
@@ -540,12 +440,11 @@ def cleanUpGarbage(S, z, gamma_p, NP, A, delta, dim):
 
 def calcProbabilisticExecutabilityOfPolicy(pi, s_p, gamma_p, Pr):
 	s, p = s_p
-	S_O = exitStates(pi, [s], gamma, gamma_p, Pr)
-	#output = calcPolicyOutput(Pi, list(map(lambda e: e[0], S)), gamma_p, delta)
-	P = stateActionTransitionFunctionToMatrix(pi, gamma_p, Pr)
+	S_O = exitStatesPolicy(pi, [s], gamma_p, Pr)
+	P, states = stateActionTransitionFunctionToMatrix(pi, gamma_p, Pr)
 	mc = markovChain(P)
 	mc.computePi('power')
-	return list(filter(lambda x: x[0] in S_O, zip(getStates(gamma_p), (lambda y: p * y, mc.pi.values()))))
+	return list(filter(lambda x: x[0] in S_O, zip(states, (lambda y: p * y, mc.pi.values()))))
 
 def calcProbabilisticExecutabilityOfPlan(Pi, s_p, gamma, gamma_p, Pr):
 	s, p = s_p
@@ -600,11 +499,7 @@ def simulate(Pi, s, n_steps, gamma, gamma_p):
 		Pi = tuple(list(Pi)[1:])
 	return executionTrace, s
 
-def simulatePolicyTaskNetwork(s, t_and_alpha, delta, gamma_p):
-	t, alpha = t_and_alpha
-	path = []
-	a = delta(dict(alpha)[t])
-	path.append(a)
+def simulatePolicy(s, a, gamma_p):
 	state_prob_pairs = gamma_p(s, a)
 	intervals_prob = []
 	prob_cum = 0
@@ -621,7 +516,7 @@ def simulatePolicyTaskNetwork(s, t_and_alpha, delta, gamma_p):
 			break
 		index += 1
 	s = state_prob_pairs[index][0]
-	return s, path
+	return s
 
 ################
 # HTNLINPOL-PLAN

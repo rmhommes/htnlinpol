@@ -20,7 +20,8 @@ def genA(z):
 		'a_localize_garbage',
 		'a_collect_garbage']
 
-def state_transition_function_policy(s, a, z, htnps=False, reverse=False):
+def state_transition_function_policy(s, a, htnps=False, reverse=False):
+	z = getDim(s)
 	if a == 'a_collect_garbage':
 		if not reverse:
 			if checkPrecs(['gripper_full_expected'], [], s):
@@ -63,15 +64,14 @@ def state_transition_function_policy(s, a, z, htnps=False, reverse=False):
 			return []
 		x, y = pos
 		if not reverse:
-			if checkPrecs(['targetPos{},{}'.format(x, y), 'currentPos{},{}'.format(x, y)], ['area_cleared{},{}'.format(x, y), 'area_failed{},{}'.format(x, y), 'area_visited{},{}'.format(x, y)], s):
+			if checkPrecs(['targetPos{},{}'.format(x, y), 'currentPos{},{}'.format(x, y)], ['area_cleared{},{}'.format(x, y), 'area_visited{},{}'.format(x, y)], s):
 				if htnps:
 					return [(addToState(['object_detected'], delFromState([],s)), 0.8), 
-							(addToState(['area_cleared{},{}'.format(x, y), 'area_visited{},{}'.format(x, y)], delFromState([],s)), 0.2 * 0.9), 
-							(addToState(['area_failed{},{}'.format(x, y), 'area_visited{},{}'.format(x, y)], delFromState([],s)), 0.2 * 0.1)]
-				return [addToState(['object_detected'], delFromState([],s)), addToState(['area_cleared{},{}'.format(x, y), 'area_visited{},{}'.format(x, y)], delFromState([],s)), addToState(['area_failed{},{}'.format(x, y), 'area_visited{},{}'.format(x, y)], delFromState([],s))]
+							(addToState(['area_cleared{},{}'.format(x, y), 'area_visited{},{}'.format(x, y)], delFromState([],s)), 0.2)]
+				return [addToState(['object_detected'], delFromState([],s)), addToState(['area_cleared{},{}'.format(x, y), 'area_visited{},{}'.format(x, y)], delFromState([],s))]
 		else:
-			if checkPrecs(['object_detected'], [], s) or checkPrecs(['area_visited{},{}'.format(x, y), 'area_cleared{},{}'.format(x, y)], [], s) or checkPrecs(['area_visited{},{}'.format(x, y), 'area_failed{},{}'.format(x, y)], [], s):
-				return [addToState([], delFromState(['object_detected', 'area_visited{},{}'.format(x, y), 'area_cleared{},{}'.format(x, y), 'area_failed{},{}'.format(x, y)],s))]
+			if checkPrecs(['object_detected'], [], s) or checkPrecs(['area_visited{},{}'.format(x, y), 'area_cleared{},{}'.format(x, y)], [], s):
+				return [addToState([], delFromState(['object_detected', 'area_visited{},{}'.format(x, y), 'area_cleared{},{}'.format(x, y)],s))]
 	prefix = 'a_move_from_to'
 	if a.startswith(prefix):
 		args = a[len(prefix):]
@@ -126,6 +126,12 @@ def getAreaVal(s, i, j):
 		if v.startswith(prefix):
 			return int(v[len(prefix):])
 
+def getDim(s):
+	for v in s:
+		prefix = 'dim'
+		if v.startswith(prefix):
+			return int(v[len(prefix):])
+
 def getStartingPosition(s):
 	for v in s:
 		prefix = 'currentPos'
@@ -142,35 +148,35 @@ def getTargetPosition(s):
 			posStrParts = posStr.split(',')
 			return int(posStrParts[0]), int(posStrParts[1])
 
-def weakPreimage(S, gamma, A, dim):
+def weakPreimage(S, gamma, A):
 	img = []
 	for s in S:
 		for a in A:
-			S_add = gamma(s, a, dim, reverse=True)
+			S_add = gamma(s, a, reverse=True)
 			for s_add in S_add:
 				img += [(s_add, a)]
 	return img
 
-def strongPreimage(S, gamma, A, dim):
+def strongPreimage(S, gamma, A):
 	img = []
 	for s in S:
 		for a in A:
-			S_add = gamma(s, a, dim, reverse=True)
-			if isStateSubSet(gamma(s, a, dim), S) and len(S_add) > 0:
+			S_add = gamma(s, a, reverse=True)
+			if isStateSubSet(gamma(s, a), S) and len(S_add) > 0:
 				for s_add in S_add:
 					img += [(s_add, a)]
 	return img
 
-def isCandidateSolution(Pi, S_F, G, S_0, gamma, A, dim, strong=False):
+def isCandidateSolution(Pi, S_F, G, S_0, gamma, A, strong=False):
 	S_prime = []
 	S = G + S_F
 	while len(stateSetIntersection(S_prime, S)) != len(S_prime) or len(S_prime) != len(S):
 		S_prime = S
 		preimage = None
 		if strong:
-			preimage = strongPreimage(S, gamma, A, dim)
+			preimage = strongPreimage(S, gamma, A)
 		else:
-			preimage = weakPreimage(S, gamma, A, dim)
+			preimage = weakPreimage(S, gamma, A)
 		Pi_prime = policySetIntersection(Pi, preimage)
 		S = S + policyStates(Pi_prime)
 		Pi = list(filter(lambda e: not isStateSubSet(e[0], S), Pi))
@@ -243,10 +249,10 @@ def policySetIntersection(Pi1, Pi2):
 def isTaskPrimitive(t, A):
 	return t in A
 
-def setBasedTransition(S, a, gamma, dim):
+def setBasedTransition(S, a, gamma):
 	S_prime = []
 	for s in S:
-		S_prime = S_prime + gamma(s, a, dim)
+		S_prime = S_prime + gamma(s, a)
 	return S_prime
 
 def checkPrecs(precs, precsNeg, s):
@@ -312,6 +318,7 @@ def generateWorld(dim, p_obst):
 				s.append('areaValue{},{},{}'.format(i,j,-1))
 	s.append('currentPos{},{}'.format(0,0))
 	s.append('startingPos{},{}'.format(0,0))
+	s.append('dim{}'.format(dim))
 	return s
 
 def getValueOfTarget(pair):
@@ -328,9 +335,10 @@ def getValueOfMove(pair):
 	xTo, yTo = getTargetPosition(s)
 	return - ((int(xFrom) - int(xTo))**2+(int(yFrom) - int(yTo))**2)**0.5
 
-def resortMoveMethods(s, M, dim):
+def resortMoveMethods(s, M):
 	if getTargetPosition(s) is None:
 		return M
+	dim = getDim(s)
 	indexNeg = dim*dim*8
 	moveMethods = M[-indexNeg:]
 	M = M[:-indexNeg]
@@ -343,7 +351,7 @@ def resortMoveMethods(s, M, dim):
 # SIMULATION
 ############
 
-def simulate(Pi, s, n_steps, gamma, dim):
+def simulate(Pi, s, n_steps, gamma):
 	path = []
 	step = 0
 	while step < n_steps:
@@ -351,7 +359,7 @@ def simulate(Pi, s, n_steps, gamma, dim):
 		for (S, a) in Pi:
 			if isStateSubSet([list(s)], S):
 				stop = False
-				S_prime = gamma(s, a, dim)
+				S_prime = gamma(s, a)
 				s = random.choice(S_prime)
 				break
 		if stop:
@@ -365,7 +373,7 @@ def simulate(Pi, s, n_steps, gamma, dim):
 ######
 
 # No BDDs are used in this version of Yoyo
-def yoyo(F, G, M, Pi, gamma, A, S_0, X_0, dim, strong=False):
+def yoyo(F, G, M, Pi, gamma, A, S_0, X_0, strong=False):
 	r = list(filter(lambda e: isStateSubSet(S_0, G) and not isEmptyHTN(e[1]), F))
 	if len(r) > 0:
 		return False
@@ -393,15 +401,15 @@ def yoyo(F, G, M, Pi, gamma, A, S_0, X_0, dim, strong=False):
 		if isTaskPrimitive(t, A):
 			S_prime = []
 			for s in S:
-				if len(gamma(s, t, dim)) > 0:
+				if len(gamma(s, t)) > 0:
 					S_prime.append(s)
 			if len(S_prime) > 0:
 				Pi.append((S_prime, t))
-				F.append((setBasedTransition(S_prime, t, gamma, dim), X))
+				F.append((setBasedTransition(S_prime, t, gamma), X))
 			else:
 				continue
 		else:
-			M = resortMoveMethods(S[0], M, dim)
+			M = resortMoveMethods(S[0], M)
 			M_prime = getMethodsForTask(t, M)
 			if len(M_prime) == 0:
 				continue
@@ -424,12 +432,12 @@ def yoyo(F, G, M, Pi, gamma, A, S_0, X_0, dim, strong=False):
 	F = list(filter(lambda x: len(x[0]) > 0, list(map(lambda e: (stateSetMinus(e[0], policyStates(Pi)), e[1]), F))))
 	if len(F) == 0 or len(sum(list(map(lambda e: e[1], F)), [])) == 0:
 		return Pi
-	Pi = yoyo(F, G, M, Pi, gamma, A, S_0, X_0, dim, strong=False)
+	Pi = yoyo(F, G, M, Pi, gamma, A, S_0, X_0, strong=False)
 	return Pi
 
 if __name__ == '__main__':
 	directions = [0, 45, 90, 135, 180, 225, 270, 315]
-	dim = 2
+	dim = 4
 	A = genA(dim)
 	p_obst = 0.5
 	s_I = generateWorld(dim, p_obst)
@@ -456,7 +464,7 @@ if __name__ == '__main__':
 		('t_goto_waypoint', [])] + chooseWaypointMethods + moveMethods
 	gamma = state_transition_function_policy
 	Pi = []
-	Pi = yoyo(F, G, M, Pi, gamma, A, [s_I], X_0, dim, strong=False)
+	Pi = yoyo(F, G, M, Pi, gamma, A, [s_I], X_0, strong=False)
 	print(Pi)
-	s, path = simulate(Pi, s_I, 100, gamma, dim)
+	s, path = simulate(Pi, s_I, 100, gamma)
 	print('PATH', path)
